@@ -1,0 +1,253 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+### Libraries Required for the Analysis
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(tictoc)
+library(pROC)
+
+```
+
+### Uploading the dataset
+```{r}
+load("/Users/kat/Documents/SeattleU/Spring 23/Written Homework-2/Housing.Rdata")
+```
+
+### Data Cleaning:
+
+```{r}
+data = data %>% filter(PERNUM == 1)
+
+#The Response Variable
+data $OWNERSHP <- as.factor(data $OWNERSHP)
+
+#The Predictor Variable
+data $MARST <- as.factor(data $MARST)
+data $NCOUPLES <- as.factor(data $NCOUPLES)
+data $NFAMS <- as.factor(data $NFAMS)
+
+#Subsetting the variables
+Housing_subset <- data %>% droplevels()%>% select('OWNERSHP','DENSITY','COSTFUEL','COSTWATR','MARST','HHINCOME','ROOMS','BUILTYR2','AGE','NCOUPLES','NFAMS')
+
+# Data Pre-processing
+
+Housing_subset$COSTFUEL <- replace(Housing_subset$COSTFUEL, Housing_subset$COSTFUEL %in% c(9993,9994,9995,9996,9997,9998),0)
+Housing_subset$COSTWATR <- replace(Housing_subset$COSTWATR, Housing_subset$COSTWATR %in% c(9993,9995,9997,9998),0)
+
+# Filter Income greater than 0
+
+Housing_subset <- Housing_subset%>% filter(Housing_subset$HHINCOME > 0)
+
+# Fitering the people with marital status status as single
+
+Housing_lin_s  <- Housing_subset %>% select('OWNERSHP','DENSITY','COSTFUEL','COSTWATR','MARST','HHINCOME','ROOMS','NCOUPLES','NFAMS','AGE','BUILTYR2')%>% filter(MARST==6)
+
+```
+
+
+### Model 1 : SVM with Linear Kernel
+
+```{r}
+set.seed(5)
+train <- sample(1:nrow(Housing_lin_s),nrow(Housing_lin_s)*0.7)
+train.house <- Housing_lin_s[train,]
+test.house <- Housing_lin_s[-train,]
+
+# Linear Kernel
+set.seed(1)
+tune.out <- tune(svm, OWNERSHP ~., data = train.house, kernel = "linear", 
+    ranges = list(cost = c(0.0001,0.001,0.01, 0.1, 1, 5, 10,20,30,40,50,100)))
+
+summary(tune.out$best.model)
+x <- tune.out$best.model
+
+w <- t(x$coefs) %*% x$SV
+w
+
+ypred <- predict(tune.out$best.model, test.house)
+print(paste("The test error rate of model is ",mean(ypred != test.house$OWNERSHP)*100,"%"))
+print(paste("Accuracy of the model for the test dataset: ",mean(ypred == test.house$OWNERSHP)*100,"%"))
+```
+
+### Confusion matrix for the Linear Kernel
+
+```{r}
+# Create a sample actual and predicted vector
+actual <- test.house$OWNERSHP
+predicted <-ypred
+
+# Create a confusion matrix
+confusion_matrix <- confusionMatrix(predicted, actual)
+
+# Plot the confusion matrix
+ggplot(data = as.data.frame(confusion_matrix$table),
+       aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq)) +
+  scale_fill_gradient(low = "lightblue", high = "steelblue")
+
+```
+
+### Computational Time
+
+```{r}
+tic()
+svmfit_l <- svm(OWNERSHP ~ . , data = train.house, kernel = "linear", cost = 50, scale = FALSE)
+toc()
+```
+
+
+```{r}
+w <- t(svmfit_l$coefs) %*% svmfit_l$SV
+w
+# pick the x and y coefficients
+bx = w[10] # bill depth
+by = w[1] # body mass 
+b0 = svmfit_l$rho # equivalent to beta_0 in e1071 implementation
+
+# plot
+base = ggplot(data=train.house, mapping= aes(x = HHINCOME, y = DENSITY)) 
+base + geom_point(aes(color=OWNERSHP)) +
+  geom_point(data=data.frame(svmfit_l$SV), mapping = aes(x = HHINCOME, y = DENSITY), shape=3, size=2)+labs(title = "SVM Classification Model with Linear Kernel",x="Annual Income", y="Average Local Population Density ")+theme(plot.title = element_text(hjust = 0.5))+labs(color = "Type of Occupants")+scale_color_manual(values = c("turquoise2", "tomato2"),labels = c("Owners", "Renters")) 
+```
+
+```{r}
+plot(tune.out$best.model,Housing_lin_s,DENSITY ~ HHINCOME )
+```
+
+### Radial Kernel
+
+
+```{r}
+set.seed(1)
+tune.radial <- tune(svm, OWNERSHP ~ ., data = train.house, kernel = "radial", 
+    ranges = list(cost = c( 1, 10, 100),
+      gamma = c(0.5, 1, 2, 3,4)))
+
+summary(tune.radial$best.model)
+tune.radial$best.model$gamma
+```
+
+```{r}
+tune.radial$performances$gamma
+```
+
+
+### Confusion matrix for the Radial Kernel
+
+```{r}
+ypred <- predict(tune.radial$best.model, test.house)
+table(predict = ypred, truth = test.house$OWNERSHP)
+print(paste("The training error rate of model is ",mean(ypred != test.house$OWNERSHP)*100,"%"))
+
+# Create a sample actual and predicted vector
+actual <- test.house$OWNERSHP
+predicted <-ypred
+
+# Create a confusion matrix
+confusion_matrix <- confusionMatrix(predicted, actual)
+
+# Plot the confusion matrix
+ggplot(data = as.data.frame(confusion_matrix$table),
+       aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq)) +
+  scale_fill_gradient(low = "lightblue", high = "steelblue")
+```
+
+```{r}
+tic()
+svm_radial <- svm(OWNERSHP ~ . , data = train.house, kernel = "radial", cost = 1,gamma=0.5, scale = FALSE)
+toc()
+```
+
+
+```{r}
+w1 <- t(svm_radial$coefs) %*% svm_radial$SV
+w1
+# pick the x and y coefficients
+bx = w[11] # Rooms 
+by = w[10] # Income
+b0 = svm_radial$rho # equivalent to beta_0 in e1071 implementation
+
+# plot
+base = ggplot(data=train.house, mapping= aes(x = ROOMS, y = HHINCOME)) 
+base + geom_point(aes(color=OWNERSHP)) +
+  geom_point(data=data.frame(svm_radial$SV), mapping = aes(x = ROOMS, y = HHINCOME), shape=3, size=2)+labs(title = "SVM Classification Model with Radial Kernel",x="Number of Rooms", y="Average Income ")+theme(plot.title = element_text(hjust = 0.5))+labs(color = "Type of Occupants")+scale_color_manual(values = c("turquoise2", "tomato2"),labels = c("Owners", "Renters")) 
+
+plot(tune.radial$best.model,train.house,HHINCOME ~ ROOMS )
+```
+
+
+### Polynomial Kernel 
+
+```{r}
+tune.poly <- tune(svm, OWNERSHP ~ ., data = train.house, 
+    kernel = "polynomial", 
+    ranges = list(
+      degree = c(2,3,4,5,6,7),
+      coef0 = c(0,1),
+      cost =c(0.01,0.05,0.1,0.5,1,5,10)
+    )
+  )
+tune.poly$best.model
+
+ypred <- predict(tune.poly$best.model, test.house)
+table(predict = ypred, truth = test.house$OWNERSHP)
+print(paste("The test error rate of Polynomial model is ",mean(ypred != test.house$OWNERSHP)*100,"%"))
+
+```
+
+### Confusion matrix for Polunomial Kernel
+
+```{r}
+# Create a sample actual and predicted vector
+actual <- test.house$OWNERSHP
+predicted <-ypred
+
+# Create a confusion matrix
+confusion_matrix <- confusionMatrix(predicted, actual)
+
+# Plot the confusion matrix
+ggplot(data = as.data.frame(confusion_matrix$table),
+       aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq)) +
+  scale_fill_gradient(low = "lightblue", high = "steelblue") 
+```
+
+### Computational Time
+```{r}
+tic()
+svm_poly <- svm(OWNERSHP ~ . , data = train.house, kernel = "polynomial", cost = 10,degree=3,coef0= 1,scale = FALSE)
+toc()
+```
+
+```{r}
+w <- t(svm_poly$coefs) %*% svm_poly$SV
+w
+# pick the x and y coefficients
+bx = w[24] # Rooms 
+by = w[11] # Income
+b0 = svm_poly$rho # equivalent to beta_0 in e1071 implementation
+
+# plot
+base = ggplot(data=train.house, mapping= aes(x = AGE, y = ROOMS)) 
+base + geom_point(aes(color=OWNERSHP)) +
+  geom_point(data=data.frame(svm_poly$SV), mapping = aes(x = AGE, y = ROOMS), shape=3, size=2)+labs(title = "SVM Classification Model with Polynomial Kernel",x="Age", y="Number of rooms ")+theme(plot.title = element_text(hjust = 0.5))+labs(color = "Type of Occupants")+scale_color_manual(values = c("turquoise2", "tomato2"),labels = c("Owners", "Renters")) 
+```
+
+```{r}
+plot(tune.poly$best.model,Housing_lin_s,ROOMS ~ AGE )
+```
+
